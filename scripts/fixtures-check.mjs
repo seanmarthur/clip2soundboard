@@ -2,17 +2,12 @@
 // Asserts the public seam only: detectStatements(sourcePath).
 //
 // Usage: node scripts/fixtures-check.mjs
-import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { generate } from "./fixtures-gen.mjs";
-import { detectStatements } from "../src/detect.ts";
+import { assertModelPinned, detectStatements } from "../src/detect.ts";
 
-const require = createRequire(import.meta.url);
 const here = dirname(fileURLToPath(import.meta.url));
-const PINNED_MODEL_SHA256 = "a35ebf52fd3ce5f1469b2a36158dba761bc47b973ea3382b3186ca15b1f5af28";
 const TOLERANCE_MS = 60;
 
 let failures = 0;
@@ -21,9 +16,7 @@ const assert = (name, ok, detail = "") => {
   if (!ok) failures++;
 };
 
-const modelFile = join(dirname(require.resolve("@ricky0123/vad-node")), "silero_vad.onnx");
-const hash = createHash("sha256").update(readFileSync(modelFile)).digest("hex");
-assert("silero model hash pinned", hash === PINNED_MODEL_SHA256, hash);
+assert("silero model hash pinned", (await assertModelPinned()) !== "");
 
 const { manifest, outDir } = generate(join(here, "fixtures"));
 

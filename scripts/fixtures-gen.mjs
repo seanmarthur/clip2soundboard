@@ -7,7 +7,7 @@
 // probabilities. ffmpeg-static does the encode and the noise-floor mix.
 //
 // Usage: node scripts/fixtures-gen.mjs [outDir]
-//   outDir defaults to scripts/fixtures/ (gitignored).
+//   outDir defaults to scripts/fixtures/ (wavs gitignored; ground-truth.json is committed — the independent source of truth for expected bounds).
 //
 // ponytail: fixture set is three positive cases + one negative; add more only
 // when a real pipeline bug needs a reproducer.

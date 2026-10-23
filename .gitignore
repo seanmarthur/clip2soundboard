@@ -4,4 +4,4 @@ dist/
 .ranges.json
 samples/
 .pi/
-scripts/fixtures/
+scripts/fixtures/*.wav

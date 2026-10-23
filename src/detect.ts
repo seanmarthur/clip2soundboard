@@ -4,6 +4,7 @@
 // (measured: research/silero-vad-in-node.md), so VAD is only the coarse
 // segmenter. ADR-0001 + decisions #5/#6.
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 
@@ -55,6 +56,19 @@ async function decodeToPcm16(sourcePath: string, cleanup: boolean): Promise<Floa
 // --- VAD ---------------------------------------------------------------------
 function modelPath(): string {
   return require.resolve("@ricky0123/vad-node").replace(/[^/\\]+$/, "silero_vad.onnx");
+}
+
+// The model is vendored by @ricky0123/vad-node (MIT, snakers4/silero-vad). The
+// hash is pinned so a silent model swap fails loudly instead of shifting bounds.
+const PINNED_SILERO_SHA256 = "a35ebf52fd3ce5f1469b2a36158dba761bc47b973ea3382b3186ca15b1f5af28";
+
+/** Throws if the vendored silero model is not the pinned one. Idempotent. */
+export async function assertModelPinned(): Promise<string> {
+  const hash = createHash("sha256").update(readFileSync(modelPath())).digest("hex");
+  if (hash !== PINNED_SILERO_SHA256) {
+    throw new Error(`silero model hash mismatch: ${hash} (pinned ${PINNED_SILERO_SHA256})`);
+  }
+  return hash;
 }
 
 async function frameProbs(session: unknown, audio: Float32Array): Promise<number[]> {
@@ -185,6 +199,7 @@ export async function detectStatements(sourcePath: string, options: DetectOption
     cleanup: true,
     ...options,
   };
+  await assertModelPinned();
   const audio = await decodeToPcm16(sourcePath, opts.cleanup);
   const session = await ort.InferenceSession.create(modelPath());
   const probs = await frameProbs(session, audio);
