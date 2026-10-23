@@ -3,3 +3,5 @@ dist/
 *.mp3
 .ranges.json
 samples/
+.pi/
+scripts/fixtures/
