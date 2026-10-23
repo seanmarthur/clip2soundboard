@@ -110,7 +110,7 @@ function encodeFixture(outDir, fixture, voice) {
     const { colour, amplitude, lowpassHz } = fixture.noise;
     args.push(
       "-f", "lavfi", "-i",
-      `anoisesrc=colour=${colour}:sample_rate=${SAMPLE_RATE}:duration=${fixture.durationMs / 1000}:amplitude=${amplitude}`,
+      `anoisesrc=colour=${colour}:sample_rate=${SAMPLE_RATE}:duration=${fixture.durationMs / 1000}:amplitude=${amplitude}:seed=0`,
       "-filter_complex",
       `[1:a]lowpass=f=${lowpassHz}[n];[0:a][n]amix=inputs=2:duration=first:normalize=0[m]`,
       "-map", "[m]",

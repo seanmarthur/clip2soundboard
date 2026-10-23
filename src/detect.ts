@@ -201,7 +201,13 @@ export async function detectStatements(sourcePath: string, options: DetectOption
   };
   await assertModelPinned();
   const audio = await decodeToPcm16(sourcePath, opts.cleanup);
-  const session = await ort.InferenceSession.create(modelPath());
+  // Pinned threads: ONNX Runtime's default thread scheduling flips frames whose
+  // probability sits on the threshold (measured: noise-floor onset Δstart 30 vs
+  // 90 ms run-to-run without this). Detection must be bit-identical (decision #11).
+  const session = await ort.InferenceSession.create(modelPath(), {
+    intraOpNumThreads: 1,
+    interOpNumThreads: 1,
+  });
   const probs = await frameProbs(session, audio);
   const env = rmsEnvelope(audio);
   return detectCoarse(probs, opts).map((coarse) => {

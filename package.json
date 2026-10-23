@@ -18,8 +18,8 @@
     "onnxruntime-node": "^1.30.0"
   },
   "devDependencies": {
-    "@types/node": "^24.0.0",
-    "typescript": "^5.0.0"
+    "@types/node": "~24.19.2",
+    "typescript": "~5.9.3"
   },
   "allowScripts": {
     "onnxruntime-node@1.30.0": true,
