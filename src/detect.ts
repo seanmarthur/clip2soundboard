@@ -201,9 +201,11 @@ export async function detectStatements(sourcePath: string, options: DetectOption
   };
   await assertModelPinned();
   const audio = await decodeToPcm16(sourcePath, opts.cleanup);
-  // Pinned threads: ONNX Runtime's default thread scheduling flips frames whose
-  // probability sits on the threshold (measured: noise-floor onset Δstart 30 vs
-  // 90 ms run-to-run without this). Detection must be bit-identical (decision #11).
+  // Pinned threads: the #11 determinism invariant demands bit-identical
+  // detection; single-threaded execution removes ONNX Runtime's reduction-order
+  // variance for frames whose probability sits on the threshold. (The observed
+  // fixture flake was anoisesrc's unseeded noise, fixed in the generator —
+  // this is the belt to that braces.)
   const session = await ort.InferenceSession.create(modelPath(), {
     intraOpNumThreads: 1,
     interOpNumThreads: 1,
