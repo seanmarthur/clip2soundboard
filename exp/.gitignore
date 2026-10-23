@@ -1,0 +1,5 @@
+*
+!.gitignore
+!gen-sources.sh
+!stream.js
+!stall3.js
