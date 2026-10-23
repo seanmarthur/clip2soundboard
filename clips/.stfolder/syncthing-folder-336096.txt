@@ -1,0 +1,5 @@
+# This directory is a Syncthing folder marker.
+# Do not delete.
+
+folderID: c2s-clips
+created: 2026-10-23T14:09:46Z

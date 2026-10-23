@@ -1,0 +1,54 @@
+{
+  "generatedBy": "scripts/fixtures-gen.mjs",
+  "sampleRate": 16000,
+  "note": "All boundaries are ground truth in milliseconds from Source start.",
+  "fixtures": [
+    {
+      "id": "micro-statement",
+      "durationMs": 1300,
+      "statements": [
+        {
+          "startMs": 500,
+          "endMs": 800
+        }
+      ],
+      "notes": "single 0.3 s micro-Statement in silence",
+      "file": "micro-statement.wav",
+      "hasNoise": false
+    },
+    {
+      "id": "split-statement",
+      "durationMs": 2000,
+      "statements": [
+        {
+          "startMs": 500,
+          "endMs": 1500
+        }
+      ],
+      "notes": "one Statement split by a 200 ms pause; Fuzziness must bridge it",
+      "file": "split-statement.wav",
+      "hasNoise": false
+    },
+    {
+      "id": "noise-floor",
+      "durationMs": 1600,
+      "statements": [
+        {
+          "startMs": 400,
+          "endMs": 1000
+        }
+      ],
+      "notes": "Statement over sub-voice-band background noise",
+      "file": "noise-floor.wav",
+      "hasNoise": true
+    },
+    {
+      "id": "silence-only",
+      "durationMs": 1000,
+      "statements": [],
+      "notes": "negative case: background noise alone must yield no Statement",
+      "file": "silence-only.wav",
+      "hasNoise": true
+    }
+  ]
+}
