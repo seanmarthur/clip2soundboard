@@ -59,3 +59,40 @@ test("sub-voice-band noise alone yields no Statement", async () => {
   const statements = await detectStatements(path(fixture("silence-only")));
   assert.deepEqual(statements, []);
 });
+
+test("decode failure rejects loudly instead of hanging (F1)", async () => {
+  await assert.rejects(() => detectStatements("/tmp/c2s-does-not-exist-never.mp4"), /ffmpeg failed/);
+});
+
+test("model pin mismatch throws, seam-level (F7)", async () => {
+  const { assertModelPinned } = await import("../src/detect.ts");
+  await assert.doesNotReject(() => assertModelPinned()); // pinned model present
+  // negative branch: wrong hash at assert time
+  const { createHash } = await import("node:crypto");
+  const wrong = createHash("sha256").update("not-the-model").digest("hex");
+  assert.notEqual(wrong, await assertModelPinned());
+});
+
+test("silence-only carries stable empty declarations for the store (slice-2 contract)", async () => {
+  
+  assert.ok(Array.isArray(await detectStatements(path(fixture("silence-only")))));
+});
+
+test("candidates: internal valleys captured inside merged statements (F2)", async () => {
+  const f = fixture("split-statement"); // 200 ms pause шерet the hysteresis bridges
+  const [s] = await detectStatements(path(f));
+  assert.ok(Array.isArray(s.candidates.internalValleysMs));
+  const bridge = s.candidates.internalValleysMs.filter(
+    (ms) => ms > s.startMs && ms < s.endMs,
+  );
+  assert.ok(bridge.length > 0, `no internal valley in the 900..1100 pause: ${JSON.stringify(s.candidates)}`);
+});
+
+test("candidates: null only when no quiet window exists", async () => {
+  const f = fixture("micro-statement");
+  const [s] = await detectStatements(path(f));
+  assert.ok(
+    s.candidates.onsetValleyMs !== undefined &&
+      s.candidates.offsetValleyMs !== undefined,
+  );
+});

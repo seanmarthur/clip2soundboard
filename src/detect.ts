@@ -17,7 +17,11 @@ export interface Statement {
   endMs: number;
   peakProb: number;
   detection: { startMs: number; endMs: number };
-  candidates: { onsetValleyMs: number | null; offsetValleyMs: number | null };
+  candidates: {
+    onsetValleyMs: number | null;
+    offsetValleyMs: number | null;
+    internalValleysMs: number[];
+  };
 }
 
 export interface DetectOptions {
@@ -43,9 +47,10 @@ async function decodeToPcm16(sourcePath: string, cleanup: boolean): Promise<Floa
   let stderr = "";
   proc.stdout.on("data", (c: Buffer) => chunks.push(c));
   proc.stderr.on("data", (c: Buffer) => (stderr += c.toString()));
-  const [code] = await new Promise<[number | null]>((res) =>
-    proc.on("close", (c) => res([c])),
-  );
+  const [code] = await new Promise<[number | null]>((res, rej) => {
+    proc.on("error", rej); // missing binary / spawn failure: reject, never hang
+    proc.on("close", (c) => res([c]));
+  });
   if (code !== 0) throw new Error(`ffmpeg failed (${sourcePath}): ${stderr.slice(-500)}`);
   const pcm = Buffer.concat(chunks);
   const out = new Float32Array(pcm.length >> 1);
@@ -108,9 +113,11 @@ function rmsEnvelope(audio: Float32Array): EnvelopeStep[] {
 }
 
 function refineRange(env: EnvelopeStep[], coarse: { startMs: number; endMs: number }) {
-  // Noise floor from the quiet lead of the Source; threshold relative to it.
-  const lead = env.filter((w) => w.startMs < 300).map((w) => w.rms).sort((a, b) => a - b);
-  const noiseFloor = lead.length ? lead[lead.length >> 1] : 0;
+  // Noise floor from the quietest quartile of the whole envelope — robust to
+  // Sources that start mid-speech or under a loud intro (a fixed lead window
+  // crushes recovery in exactly those cases, the common OBS-replay shapes).
+  const quiet = env.map((w) => w.rms).sort((a, b) => a - b);
+  const noiseFloor = quiet[quiet.length >> 2] ?? 0;
   const peak = env.reduce((m, w) => Math.max(m, w.rms), 0);
   const threshold = Math.max(2.5 * noiseFloor, 0.15 * peak);
   const inWindow = (w: EnvelopeStep, lo: number, hi: number) => w.startMs >= lo && w.startMs <= hi;
@@ -122,21 +129,29 @@ function refineRange(env: EnvelopeStep[], coarse: { startMs: number; endMs: numb
     .map((w, i) => ({ w, prevAbove: i > 0 && env[i - 1].rms >= threshold }))
     .filter(({ w, prevAbove }) => inWindow(w, coarse.endMs - 288, coarse.endMs + 64) && w.rms >= threshold && prevAbove);
 
+  // F4: the valley is the QUIETEST window (argmin rms), consistently on both
+  // edges — slice 3's snap must match what is stored here.
+  const valley = (lo: number, hi: number): number | null => {
+    const inRange = env.filter((w) => inWindow(w, lo, hi) && w.rms < threshold);
+    return inRange.length ? inRange.reduce((q, w) => (w.rms < q.rms ? w : q)).startMs : null;
+  };
   const startMs = starts.length ? starts[0].startMs : coarse.startMs;
   const endMs = ends.length ? ends[ends.length - 1].w.startMs + RMS_WINDOW / 16 : coarse.endMs;
 
-  // Valley candidates for the Fuzziness re-run (decision #6): the quietest
-  // envelope window within ±250 ms on either side of each refined edge.
-  const near = (edge: number, lo: number, hi: number) =>
-    env.filter((w) => inWindow(w, lo, hi) && w.rms < threshold).map((w) => w.startMs);
-  const onset = near(startMs, startMs - CANDIDATE_SPAN_MS, startMs);
-  const offset = near(endMs, endMs, endMs + CANDIDATE_SPAN_MS);
+  // Valley candidates for the Fuzziness re-run (decision #6), plus every
+  // below-threshold window inside the coarse range: hysteresis merges
+  // statements separated by <320 ms, and slice 3 needs those internal valleys
+  // to split a merge the Source disagrees with.
+  const internal = env
+    .filter((w) => inWindow(w, startMs, endMs) && w.rms < threshold)
+    .map((w) => w.startMs);
   return {
     startMs,
     endMs,
     candidates: {
-      onsetValleyMs: onset.length ? Math.min(...onset) : null,
-      offsetValleyMs: offset.length ? Math.max(...offset) : null,
+      onsetValleyMs: valley(startMs - CANDIDATE_SPAN_MS, startMs),
+      offsetValleyMs: valley(endMs, endMs + CANDIDATE_SPAN_MS),
+      internalValleysMs: internal,
     },
     threshold,
   };
