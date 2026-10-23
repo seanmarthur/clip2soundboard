@@ -1,9 +1,10 @@
 # Verification strategy: synthetic fixtures for a fuzzy domain
 
 Part of issue #11. This records only what was measured in the `work/fixture-designer`
-worktree; the broader VAD-vs-whisper docs research lives in ticket #2 and ADR-0001.
+worktree. The Silero engine/package/model findings now have their own artifact:
+`research/silero-vad-in-node.md` (issue #2, same branch). Architecture rationale: ADR-0001.
 
-## VAD spike (de-risks ticket #2)
+## VAD spike (resolves ticket #2; artifact: research/silero-vad-in-node.md)
 
 Question: can a Node silero VAD install and run at all?
 
