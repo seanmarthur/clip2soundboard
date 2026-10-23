@@ -78,13 +78,13 @@ async function frameProbs(session: unknown, audio: Float32Array): Promise<number
 }
 
 // --- energy envelope + edge recovery ----------------------------------------
-interface Window {
+interface EnvelopeStep {
   startMs: number;
   rms: number;
 }
 
-function rmsEnvelope(audio: Float32Array): Window[] {
-  const out: Window[] = [];
+function rmsEnvelope(audio: Float32Array): EnvelopeStep[] {
+  const out: EnvelopeStep[] = [];
   for (let off = 0; off + RMS_WINDOW <= audio.length; off += RMS_WINDOW) {
     let sum = 0;
     for (let i = off; i < off + RMS_WINDOW; i++) sum += audio[i] * audio[i];
@@ -93,13 +93,13 @@ function rmsEnvelope(audio: Float32Array): Window[] {
   return out;
 }
 
-function refineRange(env: Window[], coarse: { startMs: number; endMs: number }) {
+function refineRange(env: EnvelopeStep[], coarse: { startMs: number; endMs: number }) {
   // Noise floor from the quiet lead of the Source; threshold relative to it.
   const lead = env.filter((w) => w.startMs < 300).map((w) => w.rms).sort((a, b) => a - b);
   const noiseFloor = lead.length ? lead[lead.length >> 1] : 0;
   const peak = env.reduce((m, w) => Math.max(m, w.rms), 0);
   const threshold = Math.max(2.5 * noiseFloor, 0.15 * peak);
-  const inWindow = (w: Window, lo: number, hi: number) => w.startMs >= lo && w.startMs <= hi;
+  const inWindow = (w: EnvelopeStep, lo: number, hi: number) => w.startMs >= lo && w.startMs <= hi;
 
   const starts = env.filter((w) => inWindow(w, coarse.startMs - 160, coarse.startMs + 96) && w.rms >= threshold);
   // Two consecutive above-threshold windows (20 ms) end a Statement, so a lone
