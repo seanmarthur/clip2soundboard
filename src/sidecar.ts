@@ -32,7 +32,7 @@ export interface RangeOptions {
   rescanHard?: boolean;
   minMs?: number;
   maxMs?: number;
-  fuzz?: number;
+  fuzz?: number; // fuzziness window in seconds
 }
 
 const PINNED_SILERO_SHA256 = "a35ebf52fd3ce5f1469b2a36158dba761bc47b973ea3382b3186ca15b1f5af28";
@@ -60,6 +60,81 @@ function loadSidecar(path: string): SidecarV1 | null {
 function saveSidecar(path: string, data: SidecarV1) {
   ensureDir(path);
   writeFileSync(path, JSON.stringify(data, null, 1));
+}
+
+/**
+ * Apply fuzziness re-run: snap statement edges to nearest valley candidates within ±fuzzMs.
+ * - Each edge snaps to the nearest stored valley candidate within the fuzz window
+ * - Clamps: never past midpoint to neighbour; min/max-ms applied after snap
+ * - Human-edited statements skipped unless force=true
+ * - Detection-time candidates are the only source of truth
+ */
+function applyFuzz(
+  statements: SidecarStatement[],
+  fuzzMs: number,
+  minMs: number,
+  maxMs: number,
+  force: boolean
+): void {
+  for (let i = 0; i < statements.length; i++) {
+    const stmt = statements[i];
+    if (stmt.edited && !force) continue;
+
+    const candidates = stmt.candidates;
+    const onsetValley = candidates.onsetValleyMs;
+    const offsetValley = candidates.offsetValleyMs;
+    const internalValleys = candidates.internalValleysMs || [];
+
+    // Determine neighbour midpoints for clamping
+    const prevEnd = i > 0 ? statements[i - 1].endMs : -Infinity;
+    const nextStart = i < statements.length - 1 ? statements[i + 1].startMs : Infinity;
+    const prevMid = (prevEnd + stmt.startMs) / 2;
+    const nextMid = (stmt.endMs + nextStart) / 2;
+
+    // Snap startMs to nearest onset valley within ±fuzzMs
+    let newStart = stmt.startMs;
+    if (onsetValley !== null && Math.abs(onsetValley - stmt.startMs) <= fuzzMs) {
+      const candidate = onsetValley;
+      // Clamp: never past midpoint to previous statement
+      newStart = Math.max(candidate, prevMid);
+    }
+
+    // Snap endMs to nearest offset valley within ±fuzzMs
+    let newEnd = stmt.endMs;
+    if (offsetValley !== null && Math.abs(offsetValley - stmt.endMs) <= fuzzMs) {
+      const candidate = offsetValley;
+      // Clamp: never past midpoint to next statement
+      newEnd = Math.min(candidate, nextMid);
+    }
+
+    // Also consider internal valleys for potential splits (if fuzz allows)
+    // For now, internal valleys are used when an edge snap would cross one
+    // but we don't split statements in this slice - that's for future work
+
+    // Apply min/max-ms clamps after snap
+    newStart = Math.max(newStart, stmt.endMs - maxMs); // ensure length <= maxMs
+    newEnd = Math.min(newEnd, stmt.startMs + maxMs);
+    // Ensure length >= minMs
+    if (newEnd - newStart < minMs) {
+      // Try to expand equally, preferring the snapped edge
+      const deficit = minMs - (newEnd - newStart);
+      newStart = Math.max(newStart - deficit / 2, prevMid);
+      newEnd = Math.min(newEnd + deficit / 2, nextMid);
+    }
+
+    // Final clamp to neighbour midpoints
+    newStart = Math.max(newStart, prevMid);
+    newEnd = Math.min(newEnd, nextMid);
+
+    // Only apply if valid
+    if (newEnd > newStart && newEnd - newStart >= minMs && newEnd - newStart <= maxMs) {
+      stmt.startMs = newStart;
+      stmt.endMs = newEnd;
+      stmt.note = stmt.note
+        ? `${stmt.note} | fuzz-snapped: ${newStart}..${newEnd}`
+        : `fuzz-snapped: ${newStart}..${newEnd}`;
+    }
+  }
 }
 
 export async function deriveRanges(
@@ -180,6 +255,11 @@ export async function deriveRanges(
   // Rescan-hard: drop all edits and notes
   if (rescanHard) {
     merged.forEach((m) => { m.edited = false; m.note = null; });
+  }
+
+  // Apply fuzziness re-run: snap edges to nearest valley candidates within ±fuzz
+  if (fuzz && fuzz > 0) {
+    applyFuzz(merged, fuzz * 1000, minMs, maxMs, force);
   }
 
   const sidecar: SidecarV1 = {

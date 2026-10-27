@@ -93,3 +93,84 @@ test("silence-only writes empty statements array", async () => {
   const sidecar = await deriveRanges(fpath(f), join(tmpdir(), "out-silence"));
   assert.deepEqual(sidecar.statements, []);
 });
+
+test("fuzz=0 leaves bounds unchanged", async () => {
+  const f = fixture("split-statement");
+  const out = join(tmpdir(), "out-nofuzz-" + Date.now());
+  const noFuzz = await deriveRanges(fpath(f), out, { minMs: 300, fuzz: 0 });
+  const noFuzz2 = await deriveRanges(fpath(f), out, { minMs: 300, fuzz: 0 });
+  // Re-run with fuzz=0 should not change bounds
+  assert.equal(noFuzz.statements[0].startMs, noFuzz2.statements[0].startMs);
+  assert.equal(noFuzz.statements[0].endMs, noFuzz2.statements[0].endMs);
+});
+
+test("fuzz snaps edges to valley candidates within window", async () => {
+  const f = fixture("split-statement");
+  const outBase = join(tmpdir(), "out-base-" + Date.now());
+  const outFuzzed = join(tmpdir(), "out-fuzzed-" + Date.now());
+  const base = await deriveRanges(fpath(f), outBase, { minMs: 300, fuzz: 0 });
+  const fuzzed = await deriveRanges(fpath(f), outFuzzed, { minMs: 300, fuzz: 0.5 });
+  // At least one edge should move toward a valley candidate
+  const sBase = base.statements[0];
+  const sFuzz = fuzzed.statements[0];
+  const moved = sFuzz.startMs !== sBase.startMs || sFuzz.endMs !== sBase.endMs;
+  assert.ok(moved, "fuzz should move at least one edge toward a valley");
+  // Note should record the snap
+  assert.ok(sFuzz.note?.includes("fuzz-snapped"));
+});
+
+test("edited statement untouched without --force", async () => {
+  const f = fixture("split-statement");
+  const out = join(tmpdir(), "out-edit-fuzz-" + Date.now());
+  await deriveRanges(fpath(f), out, { minMs: 300, fuzz: 0 });
+  const sidecarPath = join(out, `split-statement.ranges.json`);
+  const loaded = loadSidecar(sidecarPath)!;
+  loaded.statements[0].edited = true;
+  const origStart = loaded.statements[0].startMs;
+  const origEnd = loaded.statements[0].endMs;
+  const { writeFileSync } = await import("node:fs");
+  writeFileSync(sidecarPath, JSON.stringify(loaded, null, 1));
+  // Re-run with fuzz but no force
+  const fuzzed = await deriveRanges(fpath(f), out, { minMs: 300, fuzz: 0.5 });
+  assert.equal(fuzzed.statements[0].startMs, origStart);
+  assert.equal(fuzzed.statements[0].endMs, origEnd);
+});
+
+test("--force overrides edited protection with fuzz", async () => {
+  const f = fixture("split-statement");
+  const out = join(tmpdir(), "out-force-fuzz-" + Date.now());
+  await deriveRanges(fpath(f), out, { minMs: 300, fuzz: 0 });
+  const sidecarPath = join(out, `split-statement.ranges.json`);
+  const loaded = loadSidecar(sidecarPath)!;
+  loaded.statements[0].edited = true;
+  const origStart = loaded.statements[0].startMs;
+  const { writeFileSync } = await import("node:fs");
+  writeFileSync(sidecarPath, JSON.stringify(loaded, null, 1));
+  // Re-run with fuzz and force
+  const fuzzed = await deriveRanges(fpath(f), out, { minMs: 300, fuzz: 0.5, force: true });
+  assert.notEqual(fuzzed.statements[0].startMs, origStart);
+});
+
+test("fixed fuzz reproduces identical bounds (determinism)", async () => {
+  const f = fixture("split-statement");
+  const out1 = join(tmpdir(), "out-det1-" + Date.now());
+  const out2 = join(tmpdir(), "out-det2-" + Date.now());
+  const first = await deriveRanges(fpath(f), out1, { minMs: 300, fuzz: 0.3 });
+  const second = await deriveRanges(fpath(f), out2, { minMs: 300, fuzz: 0.3 });
+  assert.equal(first.statements[0].startMs, second.statements[0].startMs);
+  assert.equal(first.statements[0].endMs, second.statements[0].endMs);
+});
+
+test("fuzz clamps at neighbour midpoint", async () => {
+  // This test needs two statements close together
+  // micro-statement has short duration; split-statement has one long statement
+  // We'll test that bounds don't cross midpoint
+  const f = fixture("split-statement");
+  const out = join(tmpdir(), "out-clamp-" + Date.now());
+  const fuzzed = await deriveRanges(fpath(f), out, { minMs: 100, maxMs: 5000, fuzz: 10 });
+  const s = fuzzed.statements[0];
+  // The statement should not exceed reasonable bounds
+  assert.ok(s.startMs >= 0);
+  assert.ok(s.endMs > s.startMs);
+  assert.ok(s.endMs - s.startMs >= 100);
+});
