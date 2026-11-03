@@ -274,3 +274,49 @@ export async function deriveRanges(
 }
 
 export { slugFromPath, boundsHash, fileSha256, loadSidecar };
+// --- render ------------------------------------------------------------------
+
+import { renderClips, type RenderContext } from "./render.ts";
+
+export interface RenderOptions {
+  loudnormTargetI?: number;
+  loudnormTargetTP?: number;
+  loudnormTargetLRA?: number;
+}
+
+export async function renderSidecar(
+  sidecarPath: string,
+  sourcePath: string,
+  outDir: string,
+  renderOpts: RenderOptions = {}
+): Promise<SidecarV1> {
+  const sidecar = loadSidecar(sidecarPath);
+  if (!sidecar) throw new Error(`Sidecar not found: ${sidecarPath}`);
+
+  const ctx: RenderContext = {
+    statements: sidecar.statements.map((s) => ({ id: s.id, startMs: s.startMs, endMs: s.endMs, sourcePath })),
+    outDir,
+    opts: {
+      loudnormTargetI: renderOpts.loudnormTargetI,
+      loudnormTargetTP: renderOpts.loudnormTargetTP,
+      loudnormTargetLRA: renderOpts.loudnormTargetLRA,
+    },
+  };
+
+  const result = await renderClips(ctx);
+
+  // Update sidecar with clip info
+  for (const rendered of result.statements) {
+    const idx = sidecar.statements.findIndex((s) => s.id === rendered.id);
+    if (idx >= 0) {
+      sidecar.statements[idx].clip = {
+        path: rendered.clipPath,
+        bytes: rendered.bytes,
+        renderedFrom: rendered.boundsHash,
+      };
+    }
+  }
+
+  saveSidecar(sidecarPath, sidecar);
+  return sidecar;
+}

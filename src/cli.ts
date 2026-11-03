@@ -3,7 +3,7 @@ import { parseArgs } from "node:util";
 import { readdirSync, statSync, existsSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { detectStatements, assertModelPinned } from "./detect.ts";
-import { deriveRanges, loadSidecar, slugFromPath } from "./sidecar.ts";
+import { deriveRanges, loadSidecar, slugFromPath, renderSidecar } from "./sidecar.ts";
 
 interface CliOptions {
   out: string;
@@ -174,12 +174,7 @@ async function main() {
         });
 
         if (subcommand === "render") {
-          const sidecarMod = (await import("./sidecar.ts")) as any;
-          if (typeof sidecarMod.renderSidecar === "function") {
-            await sidecarMod.renderSidecar(sidecarPath, file, outDir, {});
-          } else {
-            throw new Error("Render subcommand not supported in this version");
-          }
+          await renderSidecar(sidecarPath, file, outDir, {});
         }
 
         const finalSidecar =
