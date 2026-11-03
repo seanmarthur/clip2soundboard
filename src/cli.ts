@@ -1,7 +1,6 @@
 import { parseArgs } from "node:util";
 import { detectStatements, assertModelPinned } from "./detect.ts";
-import { deriveRanges, loadSidecar, SidecarV1 } from "./sidecar.ts";
-import { slugFromPath } from "./sidecar.ts";
+import { deriveRanges, loadSidecar, slugFromPath, renderSidecar } from "./sidecar.ts";
 
 interface CliOptions {
   out: string;
@@ -30,40 +29,40 @@ const DEFAULTS: CliOptions = {
 };
 
 async function main() {
+  const rawArgs = process.argv.slice(2);
+  
+  if (rawArgs.length === 0 || rawArgs[0] === "help" || rawArgs[0] === "-h" || rawArgs[0] === "--help") {
+    showHelp();
+    process.exit(rawArgs.length === 0 ? 1 : 0);
+  }
+  
+  let subcommand = rawArgs[0];
+  if (!["extract", "render"].includes(subcommand)) {
+    console.error(`Unknown subcommand: ${subcommand}`);
+    console.error("Available: extract, render");
+    process.exit(1);
+  }
+  
   const args = parseArgs({
-    args: process.argv.slice(2),
+    args: rawArgs.slice(1),
     options: {
-      out: { type: "string", short: "o", default: DEFAULTS.out },
-      fuzz: { type: "string", default: String(DEFAULTS.fuzz) },
-      "min-ms": { type: "string", default: String(DEFAULTS.minMs) },
-      "max-ms": { type: "string", default: String(DEFAULTS.maxMs) },
-      force: { type: "boolean", default: DEFAULTS.force },
-      rescan: { type: "boolean", default: DEFAULTS.rescan },
-      "rescan-hard": { type: "boolean", default: DEFAULTS.rescanHard },
-      json: { type: "boolean", default: DEFAULTS.json },
-      "dry-run": { type: "boolean", default: DEFAULTS.dryRun },
-      "no-transcript": { type: "boolean", default: DEFAULTS.noTranscript },
+      out: { type: "string", short: "o", default: "./clips" },
+      fuzz: { type: "string", default: "0" },
+      "min-ms": { type: "string", default: "1000" },
+      "max-ms": { type: "string", default: "30000" },
+      force: { type: "boolean", default: false },
+      rescan: { type: "boolean", default: false },
+      "rescan-hard": { type: "boolean", default: false },
+      json: { type: "boolean", default: false },
+      "dry-run": { type: "boolean", default: false },
+      "no-transcript": { type: "boolean", default: true },
       help: { type: "boolean", short: "h" },
     },
     allowPositionals: true,
   });
 
   if (args.values.help || args.positionals.length === 0) {
-    console.error(`Usage: clip2soundboard extract <file|dir> [options]
-
-Options:
-  -o, --out <dir>         Output directory (default: ./clips)
-  --fuzz <seconds>        Fuzziness window in seconds (default: 0)
-  --min-ms <ms>           Minimum statement length (default: 1000)
-  --max-ms <ms>           Maximum statement length (default: 30000)
-  --force                 Override edited ranges
-  --rescan                Re-detect, keep human-edited ranges
-  --rescan-hard           Re-detect, discard all edits
-  --json                  Machine-readable output
-  --dry-run               Detect only, write nothing
-  --no-transcript         Skip transcript (default: true)
-  -h, --help              Show this help
-`);
+    showHelp();
     process.exit(args.values.help ? 0 : 1);
   }
 
@@ -94,33 +93,102 @@ Options:
   };
 
   let hasError = false;
-  const summary: any = { files: 0, statements: 0, clips: 0, failures: 0 };
+  const summary: any = { version: 1, sources: [], summary: { files: 0, statements: 0, clips: 0, failures: 0 } };
 
   for (const file of files) {
-    summary.files++;
+    summary.summary.files++;
     try {
-      if (!args.values["dry-run"]) {
-        await deriveRanges(file, outDir, opts);
-      } else {
-        const st = await detectStatements(file);
-        const filtered = st.filter((s) => s.endMs - s.startMs >= opts.minMs && s.endMs - s.startMs <= opts.maxMs);
-        console.error(`${file}: ${filtered.length} statements (dry-run)`);
+      const slug = file.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, "") ?? "source";
+      const sidecarPath = `${outDir}/${slug}.ranges.json`;
+
+      if (subcommand === "extract" || subcommand === "render") {
+        // First derive ranges (with fuzz applied)
+        const sidecar = await deriveRanges(file, outDir, {
+          force: args.values.force,
+          rescan: args.values.rescan,
+          rescanHard: args.values["rescan-hard"],
+          minMs: Number(args.values["min-ms"]),
+          maxMs: Number(args.values["max-ms"]),
+          fuzz: Number(args.values.fuzz),
+        });
+
+        if (subcommand === "extract" && opts.dryRun) {
+          const st = await import("./detect.ts").then((m) => m.detectStatements(file));
+          const filtered = st.filter((s) => s.endMs - s.startMs >= opts.minMs && s.endMs - s.startMs <= opts.maxMs);
+          console.error(`${file}: ${filtered.length} statements (dry-run)`);
+        }
+
+        if (subcommand === "render") {
+          // Render clips for this source
+          await import("./sidecar.ts").then((m) => m.renderSidecar(
+            `${outDir}/${slug}.ranges.json`,
+            file,
+            outDir,
+            {}
+          ));
+        }
+
+        // Load sidecar for summary
+        const { loadSidecar } = await import("./sidecar.ts");
+        const finalSidecar = loadSidecar(`${outDir}/${slug}.ranges.json`);
+        
+        summary.sources.push({
+          path: file,
+          status: "ok",
+          statements: finalSidecar?.statements.map((s) => ({
+            id: s.id,
+            startMs: s.startMs,
+            endMs: s.endMs,
+            peakProb: s.detection?.peakProb,
+            detection: s.detection,
+            candidates: s.candidates,
+            clip: s.clip,
+            transcript: s.transcript,
+            edited: s.edited,
+            note: s.note,
+          })) || [],
+        });
+        summary.summary.statements += finalSidecar?.statements.length || 0;
+        summary.summary.clips += finalSidecar?.statements.filter((s) => s.clip).length || 0;
       }
-      summary.statements += 1; // simplified
     } catch (e) {
-      summary.failures++;
+      summary.summary.failures++;
       hasError = true;
       console.error(`FAIL ${file}: ${String(e).slice(0, 200)}`);
+      summary.sources.push({ path: file, status: "error", error: String(e).slice(0, 200) });
     }
   }
 
   if (args.values.json) {
-    console.log(JSON.stringify({ version: 1, sources: [], summary }));
+    console.log(JSON.stringify({ version: 1, ...summary }));
   }
 
   process.exit(hasError ? 1 : 0);
 }
 
+function showHelp() {
+  console.error(`Usage: clip2soundboard <command> <file|dir> [options]
+
+Commands:
+  extract  Detect statements and write sidecar (no render)
+  render   Extract + apply fuzz + render clips to mp3
+
+Options:
+  -o, --out <dir>         Output directory (default: ./clips)
+  --fuzz <seconds>        Fuzziness window in seconds (default: 0)
+  --min-ms <ms>           Minimum statement length (default: 1000)
+  --max-ms <ms>           Maximum statement length (default: 30000)
+  --force                 Override edited ranges
+  --rescan                Re-detect, keep human-edited ranges
+  --rescan-hard           Re-detect, discard all edits
+  --json                  Machine-readable output
+  --dry-run               Detect only, write nothing (extract only)
+  --no-transcript         Skip transcript (default: true)
+  -h, --help              Show this help
+`);
+}
+
+const opts: any = {}; // placeholder for summary reference
 main().catch((e) => {
   console.error(e);
   process.exit(1);
