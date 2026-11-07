@@ -4,6 +4,7 @@ import { readdirSync, statSync, existsSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { detectStatements, assertModelPinned } from "./detect.ts";
 import { deriveRanges, loadSidecar, slugFromPath } from "./sidecar.ts";
+import { renderClips } from "./render.ts";
 
 interface CliOptions {
   out: string;
@@ -59,6 +60,7 @@ async function main() {
       json: { type: "boolean", default: DEFAULTS.json },
       "dry-run": { type: "boolean", default: DEFAULTS.dryRun },
       "no-transcript": { type: "boolean", default: DEFAULTS.noTranscript },
+      transcript: { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
     allowPositionals: true,
@@ -84,7 +86,7 @@ async function main() {
     rescanHard: args.values["rescan-hard"] ?? DEFAULTS.rescanHard,
     json: args.values.json ?? DEFAULTS.json,
     dryRun: args.values["dry-run"] ?? DEFAULTS.dryRun,
-    noTranscript: args.values["no-transcript"] ?? DEFAULTS.noTranscript,
+    noTranscript: args.values.transcript ? false : (args.values["no-transcript"] ?? DEFAULTS.noTranscript),
   };
 
   let hasError = false;
@@ -174,12 +176,11 @@ async function main() {
         });
 
         if (subcommand === "render") {
-          const sidecarMod = (await import("./sidecar.ts")) as any;
-          if (typeof sidecarMod.renderSidecar === "function") {
-            await sidecarMod.renderSidecar(sidecarPath, file, outDir, {});
-          } else {
-            throw new Error("Render subcommand not supported in this version");
-          }
+          await renderClips(sidecar, outDir, {
+            force: opts.force,
+            sidecarPath,
+            transcript: !opts.noTranscript,
+          });
         }
 
         const finalSidecar =

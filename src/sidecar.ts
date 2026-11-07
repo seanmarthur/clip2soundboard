@@ -273,4 +273,4 @@ export async function deriveRanges(
   return sidecar;
 }
 
-export { slugFromPath, boundsHash, fileSha256, loadSidecar };
+export { slugFromPath, boundsHash, fileSha256, loadSidecar, saveSidecar };
