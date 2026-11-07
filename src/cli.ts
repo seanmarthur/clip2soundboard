@@ -1,7 +1,8 @@
 import { parseArgs } from "node:util";
 import { detectStatements, assertModelPinned } from "./detect.ts";
-import { deriveRanges, loadSidecar, SidecarV1 } from "./sidecar.ts";
-import { slugFromPath } from "./sidecar.ts";
+import { deriveRanges, loadSidecar, slugFromPath, type SidecarV1, type SidecarStatement } from "./sidecar.ts";
+import { resolve } from "node:path";
+import { readdirSync, statSync } from "node:fs";
 
 interface CliOptions {
   out: string;
@@ -28,6 +29,116 @@ const DEFAULTS: CliOptions = {
   dryRun: false,
   noTranscript: true,
 };
+
+function logJson(obj: unknown) {
+  console.log(JSON.stringify(obj));
+}
+
+function logStderr(msg: string) {
+  console.error(msg);
+}
+
+async function runExtract(inputPath: string, opts: CliOptions): Promise<{ version: 1; sources: SourceResult[]; summary: Summary }> {
+  const { readdirSync, statSync } = await import("node:fs");
+  const { resolve } = await import("node:path");
+
+  const input = resolve(inputPath);
+  const stat = statSync(input);
+  const files = stat.isDirectory()
+    ? readdirSync(input).filter((f) => /\.(mp4|mkv|webm|mov)$/i.test(f)).map((f) => resolve(input, f))
+    : [input];
+
+  const sources: SourceResult[] = [];
+  let hasError = false;
+  const summary = { files: 0, statements: 0, clips: 0, failures: 0 };
+
+  for (const file of files) {
+    summary.files++;
+    const slug = slugFromPath(file);
+    const sourceResult: SourceResult = {
+      file,
+      slug,
+      statements: 0,
+      clips: [],
+      error: null,
+    };
+
+    try {
+      if (!opts.dryRun) {
+        logStderr(`${file}: deriving ranges...`);
+        const sidecar = await deriveRanges(file, opts.out, {
+          force: opts.force,
+          rescan: opts.rescan,
+          rescanHard: opts.rescanHard,
+          minMs: opts.minMs,
+          maxMs: opts.maxMs,
+          fuzz: opts.fuzz,
+        });
+        logStderr(`${file}: ${sidecar.statements.length} statements`);
+        sourceResult.statements = sidecar.statements.length;
+        summary.statements += sidecar.statements.length;
+
+        for (const stmt of sidecar.statements) {
+          if (stmt.clip) {
+            sourceResult.clips.push({
+              id: stmt.id,
+              path: stmt.clip.path,
+              bytes: stmt.clip.bytes,
+              renderedFrom: stmt.clip.renderedFrom,
+              startMs: stmt.startMs,
+              endMs: stmt.endMs,
+            });
+            summary.clips++;
+          }
+        }
+      } else {
+        const st = await detectStatements(file);
+        const filtered = st.filter((s) => s.endMs - s.startMs >= opts.minMs && s.endMs - s.startMs <= opts.maxMs);
+        sourceResult.statements = filtered.length;
+        summary.statements += filtered.length;
+        logStderr(`${file}: ${filtered.length} statements (dry-run)`);
+      }
+    } catch (e) {
+      const errMsg = String(e).slice(0, 500);
+      sourceResult.error = errMsg;
+      summary.failures++;
+      hasError = true;
+      logStderr(`FAIL ${file}: ${errMsg}`);
+    }
+
+    sources.push(sourceResult);
+  }
+
+  return {
+    version: 1,
+    sources,
+    summary,
+  };
+}
+
+interface SourceResult {
+  file: string;
+  slug: string;
+  statements: number;
+  clips: ClipResult[];
+  error: string | null;
+}
+
+interface ClipResult {
+  id: string;
+  path: string;
+  bytes: number;
+  renderedFrom: string;
+  startMs: number;
+  endMs: number;
+}
+
+interface Summary {
+  files: number;
+  statements: number;
+  clips: number;
+  failures: number;
+}
 
 async function main() {
   const args = parseArgs({
@@ -67,21 +178,23 @@ Options:
     process.exit(args.values.help ? 0 : 1);
   }
 
+  const subcommand = args.positionals[0];
+  if (subcommand !== "extract") {
+    console.error(`Unknown subcommand: ${subcommand}`);
+    console.error("Available: extract");
+    process.exit(1);
+  }
+
+  const input = args.positionals[1];
+  if (!input) {
+    console.error("Missing input file or directory");
+    process.exit(1);
+  }
+
   await assertModelPinned();
 
-  const input = args.positionals[0];
-  const { readdirSync, statSync } = await import("node:fs");
-  const { resolve } = await import("node:path");
-
-  const inputPath = resolve(input);
-  const stat = statSync(inputPath);
-  const files = stat.isDirectory()
-    ? readdirSync(inputPath).filter((f) => /\.(mp4|mkv|webm|mov)$/i.test(f)).map((f) => resolve(inputPath, f))
-    : [inputPath];
-
-  const outDir = resolve(args.values.out);
-  const opts = {
-    outDir,
+  const opts: CliOptions = {
+    out: resolve(args.values.out),
     fuzz: Number(args.values.fuzz),
     minMs: Number(args.values["min-ms"]),
     maxMs: Number(args.values["max-ms"]),
@@ -93,35 +206,16 @@ Options:
     noTranscript: args.values["no-transcript"],
   };
 
-  let hasError = false;
-  const summary: any = { files: 0, statements: 0, clips: 0, failures: 0 };
+  const result = await runExtract(input, opts);
 
-  for (const file of files) {
-    summary.files++;
-    try {
-      if (!args.values["dry-run"]) {
-        await deriveRanges(file, outDir, opts);
-      } else {
-        const st = await detectStatements(file);
-        const filtered = st.filter((s) => s.endMs - s.startMs >= opts.minMs && s.endMs - s.startMs <= opts.maxMs);
-        console.error(`${file}: ${filtered.length} statements (dry-run)`);
-      }
-      summary.statements += 1; // simplified
-    } catch (e) {
-      summary.failures++;
-      hasError = true;
-      console.error(`FAIL ${file}: ${String(e).slice(0, 200)}`);
-    }
+  if (opts.json) {
+    logJson(result);
   }
 
-  if (args.values.json) {
-    console.log(JSON.stringify({ version: 1, sources: [], summary }));
-  }
-
-  process.exit(hasError ? 1 : 0);
+  process.exit(result.summary.failures > 0 ? 1 : 0);
 }
 
-main().catch((e) => {
-  console.error(e);
+main().catch((err) => {
+  console.error(`Fatal: ${err}`);
   process.exit(1);
 });
