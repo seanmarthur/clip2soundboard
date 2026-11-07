@@ -1,7 +1,10 @@
 import { parseArgs } from "node:util";
+import { join } from "node:path";
 import { detectStatements, assertModelPinned } from "./detect.ts";
-import { deriveRanges, loadSidecar, SidecarV1 } from "./sidecar.ts";
+import { deriveRanges, loadSidecar } from "./sidecar.ts";
+import type { SidecarV1 } from "./sidecar.ts";
 import { slugFromPath } from "./sidecar.ts";
+import { renderClips } from "./render.ts";
 
 interface CliOptions {
   out: string;
@@ -100,13 +103,21 @@ Options:
     summary.files++;
     try {
       if (!args.values["dry-run"]) {
-        await deriveRanges(file, outDir, opts);
+        const sidecar = await deriveRanges(file, outDir, opts);
+        const slug = slugFromPath(file);
+        const sidecarPath = join(outDir, `${slug}.ranges.json`);
+        const renderRes = await renderClips(sidecar, outDir, {
+          force: opts.force,
+          sidecarPath,
+        });
+        summary.clips += renderRes.rendered;
+        summary.statements += sidecar.statements.length;
       } else {
         const st = await detectStatements(file);
         const filtered = st.filter((s) => s.endMs - s.startMs >= opts.minMs && s.endMs - s.startMs <= opts.maxMs);
         console.error(`${file}: ${filtered.length} statements (dry-run)`);
+        summary.statements += filtered.length;
       }
-      summary.statements += 1; // simplified
     } catch (e) {
       summary.failures++;
       hasError = true;
