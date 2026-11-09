@@ -179,7 +179,7 @@ async function main() {
 
         const finalSidecar =
           subcommand === "render"
-            ? (loadSidecar(sidecarPath) ?? sidecar)
+            ? ((await loadSidecar(sidecarPath)) ?? sidecar)
             : sidecar;
 
         summary.sources.push({

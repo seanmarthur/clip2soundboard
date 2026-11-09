@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { promises as fs } from "node:fs";
 import { dirname, join } from "node:path";
 import { detectStatements } from "./detect.ts";
 
@@ -45,21 +45,27 @@ function boundsHash(s: { startMs: number; endMs: number }): string {
   return createHash("sha256").update(`${s.startMs}|${s.endMs}`).digest("hex").slice(0, 12);
 }
 
-function fileSha256(path: string): string {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
+async function fileSha256(path: string): Promise<string> {
+  const buf = await fs.readFile(path);
+  return createHash("sha256").update(buf).digest("hex");
 }
 
-function ensureDir(p: string) { mkdirSync(dirname(p), { recursive: true }); }
-
-function loadSidecar(path: string): SidecarV1 | null {
-  if (!existsSync(path)) return null;
-  const raw = readFileSync(path, "utf8");
-  return JSON.parse(raw) as SidecarV1;
+async function ensureDir(p: string) {
+  await fs.mkdir(dirname(p), { recursive: true });
 }
 
-function saveSidecar(path: string, data: SidecarV1) {
-  ensureDir(path);
-  writeFileSync(path, JSON.stringify(data, null, 1));
+async function loadSidecar(path: string): Promise<SidecarV1 | null> {
+  try {
+    const raw = await fs.readFile(path, "utf8");
+    return JSON.parse(raw) as SidecarV1;
+  } catch {
+    return null;
+  }
+}
+
+async function saveSidecar(path: string, data: SidecarV1) {
+  await ensureDir(path);
+  await fs.writeFile(path, JSON.stringify(data, null, 1));
 }
 
 /**
@@ -153,13 +159,13 @@ export async function deriveRanges(
     cleanup: true,
   });
 
-  const sourceSha = fileSha256(sourcePath);
+  const sourceSha = await fileSha256(sourcePath);
   const durationMs = statements.length
     ? statements[statements.length - 1].endMs
     : 0;
 
   // On rescan-hard: discard everything; on rescan: load existing to preserve edits
-  const existing = rescanHard ? null : loadSidecar(sidecarPath);
+  const existing = rescanHard ? null : await loadSidecar(sidecarPath);
   const isRescan = rescan || rescanHard;
 
   const merged: SidecarStatement[] = [];
@@ -264,25 +270,22 @@ export async function deriveRanges(
 
   const sidecar: SidecarV1 = {
     version: 1,
-    source: { path: sourcePath, sha256: fileSha256(sourcePath), durationMs },
+    source: { path: sourcePath, sha256: await fileSha256(sourcePath), durationMs },
     model: { sileroSha256: "a35ebf52fd3ce5f1469b2a36158dba761bc47b973ea3382b3186ca15b1f5af28" },
     statements: merged,
   };
 
-  saveSidecar(sidecarPath, sidecar);
+  await saveSidecar(sidecarPath, sidecar);
   return sidecar;
 }
 
 export { slugFromPath, boundsHash, fileSha256, loadSidecar };
 // --- render ------------------------------------------------------------------
 
-import { renderClips, type RenderContext } from "./render.ts";
+import { renderClips, type RenderContext, type RenderOptions } from "./render.ts";
 
-export interface RenderOptions {
-  loudnormTargetI?: number;
-  loudnormTargetTP?: number;
-  loudnormTargetLRA?: number;
-}
+// Re-export for CLI
+// (RenderOptions is now imported from render.ts)
 
 export async function renderSidecar(
   sidecarPath: string,
@@ -290,7 +293,7 @@ export async function renderSidecar(
   outDir: string,
   renderOpts: RenderOptions = {}
 ): Promise<SidecarV1> {
-  const sidecar = loadSidecar(sidecarPath);
+  const sidecar = await loadSidecar(sidecarPath);
   if (!sidecar) throw new Error(`Sidecar not found: ${sidecarPath}`);
 
   const ctx: RenderContext = {
@@ -305,6 +308,13 @@ export async function renderSidecar(
 
   const result = await renderClips(ctx);
 
+  // Surface render errors
+  if (result.errors.length > 0) {
+    const errMsg = `Render failed for ${result.errors.length} clips: ${result.errors.join("; ")}`;
+    console.error(errMsg);
+    // Still continue to update sidecar with successful clips
+  }
+
   // Update sidecar with clip info
   for (const rendered of result.statements) {
     const idx = sidecar.statements.findIndex((s) => s.id === rendered.id);
@@ -317,6 +327,6 @@ export async function renderSidecar(
     }
   }
 
-  saveSidecar(sidecarPath, sidecar);
+  await saveSidecar(sidecarPath, sidecar);
   return sidecar;
 }

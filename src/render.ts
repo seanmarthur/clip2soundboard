@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
-import { statSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { promises as fs } from "node:fs";
 import { dirname } from "node:path";
 
 const require = createRequire(import.meta.url);
@@ -132,18 +132,21 @@ export async function renderClips(ctx: RenderContext): Promise<RenderResult> {
     const outPath = ctx.outDir + "/" + stmt.id + "_" + boundsHash + ".mp3";
     const metaPath = outPath + ".meta.json";
 
-    if (existsSync(outPath) && existsSync(metaPath)) {
-      try {
-        const meta = JSON.parse(readFileSync(metaPath, "utf8"));
+    try {
+      const [outStat, metaContent] = await Promise.all([
+        fs.stat(outPath).catch(() => null),
+        fs.readFile(metaPath, "utf8").catch(() => null),
+      ]);
+      if (outStat && metaContent) {
+        const meta = JSON.parse(metaContent);
         if (meta.boundsHash === boundsHash) {
-          const stat = statSync(outPath);
-          results.push({ id: stmt.id, clipPath: outPath, bytes: stat.size, startMs: stmt.startMs, endMs: stmt.endMs, boundsHash });
+          results.push({ id: stmt.id, clipPath: outPath, bytes: outStat.size, startMs: stmt.startMs, endMs: stmt.endMs, boundsHash });
           continue;
         }
-      } catch {}
-    }
+      }
+    } catch {}
 
-    mkdirSync(dirname(outPath), { recursive: true });
+    await fs.mkdir(dirname(outPath), { recursive: true });
 
     const loudnormI = ctx.opts.loudnormTargetI ?? -16;
     const loudnormTP = ctx.opts.loudnormTargetTP ?? -1.5;
@@ -155,13 +158,14 @@ export async function renderClips(ctx: RenderContext): Promise<RenderResult> {
       loudnormTargetLRA: loudnormLRA,
     };
 
-    if (durationSec < 0.5) {
+    if (isShort) {
+      // Peak-normalize fallback for sub-0.5s clips using same targets
       const args = [
         "-hide_banner", "-nostdin",
         "-ss", String(stmt.startMs / 1000),
         "-t", String((stmt.endMs - stmt.startMs) / 1000),
         "-i", stmt.sourcePath,
-        "-af", "loudnorm=I=-99:TP=-1.5:LRA=11",
+        "-af", `loudnorm=I=${loudnormI}:TP=${loudnormTP}:LRA=${loudnormLRA}`,
         "-ac", "1",
         "-c:a", "libmp3lame",
         "-q:a", "4",
@@ -170,8 +174,8 @@ export async function renderClips(ctx: RenderContext): Promise<RenderResult> {
       ];
 
       await runFfmpeg(FFMPEG, args);
-      const stat = statSync(outPath);
-      writeFileSync(outPath + ".meta.json", JSON.stringify({ boundsHash, short: true }));
+      const stat = await fs.stat(outPath);
+      await fs.writeFile(metaPath, JSON.stringify({ boundsHash, short: true }));
       results.push({ id: stmt.id, clipPath: outPath, bytes: stat.size, startMs: stmt.startMs, endMs: stmt.endMs, boundsHash });
     } else {
       const filter1 = buildLoudnormFilter({ loudnormTargetI: loudnormI, loudnormTargetTP: loudnormTP, loudnormTargetLRA: loudnormLRA });
@@ -203,10 +207,7 @@ export async function renderClips(ctx: RenderContext): Promise<RenderResult> {
         "-ss", String(stmt.startMs / 1000),
         "-t", String((stmt.endMs - stmt.startMs) / 1000),
         "-i", stmt.sourcePath,
-        "-af", buildLoudnormFilter(
-          { loudnormTargetI: loudnormI, loudnormTargetTP: loudnormTP, loudnormTargetLRA: loudnormLRA },
-          { input_i: measured.input_i, input_tp: measured.input_tp, input_lra: measured.input_lra, input_thresh: measured.input_thresh, target_offset: measured.target_offset }
-        ),
+        "-af", filter2,
         "-ac", "1",
         "-c:a", "libmp3lame",
         "-q:a", "4",
@@ -215,14 +216,11 @@ export async function renderClips(ctx: RenderContext): Promise<RenderResult> {
       ];
 
       await runFfmpeg(FFMPEG, pass2Args);
-      const stat = statSync(outPath);
-      writeFileSync(outPath + ".meta.json", JSON.stringify({ boundsHash }));
+      const stat = await fs.stat(outPath);
+      await fs.writeFile(metaPath, JSON.stringify({ boundsHash }));
       results.push({ id: stmt.id, clipPath: outPath, bytes: stat.size, startMs: stmt.startMs, endMs: stmt.endMs, boundsHash });
     }
   }
 
   return { statements: results, errors };
-}
-
-export interface RenderOptions {
 }
