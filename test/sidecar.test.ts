@@ -37,7 +37,8 @@ test("edited:true protects bounds; proposal lands in note", async () => {
   const out = join(tmpdir(), "out-edit");
   await deriveRanges(fpath(f), out, { minMs: 300 });
   const sidecarPath = join(out, `micro-statement.ranges.json`);
-  const loaded = loadSidecar(sidecarPath)!;
+  const loaded = await loadSidecar(sidecarPath);
+  assert.ok(loaded);
   loaded.statements[0].edited = true;
   loaded.statements[0].startMs = 100;
   loaded.statements[0].endMs = 900;
@@ -53,7 +54,8 @@ test("--force overrides edited protection", async () => {
   const out = join(tmpdir(), "out-force");
   await deriveRanges(fpath(f), out, { minMs: 300 });
   const sidecarPath = join(out, `micro-statement.ranges.json`);
-  const loaded = loadSidecar(sidecarPath)!;
+  const loaded = await loadSidecar(sidecarPath);
+  assert.ok(loaded);
   loaded.statements[0].edited = true;
   loaded.statements[0].startMs = 100;
   writeFileSync(sidecarPath, JSON.stringify(loaded, null, 1));
@@ -66,18 +68,21 @@ test("rescan keeps human edits; rescan-hard drops them", async () => {
   const out = join(tmpdir(), "out-rescan");
   await deriveRanges(fpath(f), out, { minMs: 300 });
   const sidecarPath = join(out, `micro-statement.ranges.json`);
-  const loaded = loadSidecar(sidecarPath)!;
+  const loaded = await loadSidecar(sidecarPath);
+  assert.ok(loaded);
   loaded.statements[0].edited = true;
   loaded.statements[0].note = "human";
   const { writeFileSync } = await import("node:fs");
   writeFileSync(sidecarPath, JSON.stringify(loaded, null, 1));
 
   await deriveRanges(fpath(f), out, { rescan: true, minMs: 300 });
-  const afterRescan = loadSidecar(sidecarPath)!;
+  const afterRescan = await loadSidecar(sidecarPath);
+  assert.ok(afterRescan);
   assert.ok(afterRescan.statements[0].edited);
 
   await deriveRanges(fpath(f), out, { rescanHard: true, minMs: 300 });
-  const afterHard = loadSidecar(sidecarPath)!;
+  const afterHard = await loadSidecar(sidecarPath);
+  assert.ok(afterHard);
   assert.ok(!afterHard.statements[0].edited);
   assert.ok(!afterHard.statements[0].note);
 });
@@ -124,7 +129,8 @@ test("edited statement untouched without --force", async () => {
   const out = join(tmpdir(), "out-edit-fuzz-" + Date.now());
   await deriveRanges(fpath(f), out, { minMs: 300, fuzz: 0 });
   const sidecarPath = join(out, `split-statement.ranges.json`);
-  const loaded = loadSidecar(sidecarPath)!;
+  const loaded = await loadSidecar(sidecarPath);
+  assert.ok(loaded);
   loaded.statements[0].edited = true;
   const origStart = loaded.statements[0].startMs;
   const origEnd = loaded.statements[0].endMs;
@@ -141,7 +147,8 @@ test("--force overrides edited protection with fuzz", async () => {
   const out = join(tmpdir(), "out-force-fuzz-" + Date.now());
   await deriveRanges(fpath(f), out, { minMs: 300, fuzz: 0 });
   const sidecarPath = join(out, `split-statement.ranges.json`);
-  const loaded = loadSidecar(sidecarPath)!;
+  const loaded = await loadSidecar(sidecarPath);
+  assert.ok(loaded);
   loaded.statements[0].edited = true;
   const origStart = loaded.statements[0].startMs;
   const { writeFileSync } = await import("node:fs");
