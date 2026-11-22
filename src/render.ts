@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { createRequire } from "node:module";
 import type { SidecarV1, SidecarStatement } from "./sidecar.ts";
 import { saveSidecar } from "./sidecar.ts";
+import { transcribeAudio } from "./transcript.ts";
 
 const require = createRequire(import.meta.url);
 const FFMPEG: string = require("ffmpeg-static");
@@ -24,6 +25,7 @@ export interface RenderResult {
 export interface RenderOptions {
   force?: boolean;
   sidecarPath?: string;
+  transcript?: boolean;
 }
 
 /**
@@ -212,8 +214,10 @@ export async function renderClips(
   options: RenderOptions = {}
 ): Promise<RenderResult> {
   const force = options.force ?? false;
+  const wantTranscript = options.transcript ?? false;
   let rendered = 0;
   let skipped = 0;
+  let updatedTranscript = false;
   const clips: RenderResult["clips"] = [];
 
   for (const stmt of sidecar.statements) {
@@ -252,9 +256,20 @@ export async function renderClips(
         method: stmt.endMs - stmt.startMs < 500 ? "peak-normalize" : "loudnorm",
       });
     }
+
+    if (wantTranscript && (!stmt.transcript || needsRender)) {
+      const clipToTranscribe = stmt.clip?.path || clipPath;
+      if (existsSync(clipToTranscribe)) {
+        const record = await transcribeAudio(clipToTranscribe);
+        stmt.transcript = record;
+        updatedTranscript = true;
+      }
+    } else if (!wantTranscript) {
+      stmt.transcript = null;
+    }
   }
 
-  if (options.sidecarPath && rendered > 0) {
+  if (options.sidecarPath && (rendered > 0 || updatedTranscript)) {
     saveSidecar(options.sidecarPath, sidecar);
   }
 
